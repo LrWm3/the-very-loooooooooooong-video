@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+loop_mp4box_batch() {
+    local dur=$1 loops=$2 src=$3 dst=$4 batch=${5:-1000}
+    [[ $dur && $loops && $src && $dst ]] || {
+        echo "usage: loop_mp4box_batch <duration> <iterations> <input.mp4> <output.mp4> [batch]" >&2
+        return 1
+    }
+    (( loops > 0 && batch > 0 )) || { echo "iterations and batch must be >0" >&2; return 1; }
+
+    # two scratch files we swap between
+    local a b
+    a=$(mktemp --suffix .mp4) || return
+    b=$(mktemp --suffix .mp4) || { rm -f "$a"; return; }
+    trap 'rm -f "$a" "$b"' EXIT
+    cp -- "$src" "$a"
+
+    local i=0
+    while (( i < loops )); do
+        local edits="" count=0
+
+        # Build one chunk
+        if (( i == 0 )); then                       # very first segment
+            edits+="re0-${dur},0"
+            (( i++, count++ ))
+        fi
+        while (( i < loops && count < batch )); do  # rest of the chunk
+            local start=$(( i * dur ))
+            edits+="e${start}-${dur},0"
+            (( i++, count++ ))
+        done
+
+        # Apply the chunk
+        MP4Box -no-inplace -moovpad 8000 \
+               -edits 1="$edits" \
+               -out "$b" "$a" || return
+        mv -f -- "$b" "$a"     # make new file the source for next round
+
+        echo "$(( i * 100 / loops )) percent complete"
+    done
+
+    mv -f -- "$a" "$dst"
+    trap - EXIT
+}
+loop_mp4box_batch "$@"
